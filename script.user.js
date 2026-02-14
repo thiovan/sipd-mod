@@ -1,12 +1,14 @@
 // ==UserScript==
-// @name         SIPD Mod by Thio
+// @name         SIPD Mod by Thio Van
 // @namespace    https://sipd.kemendagri.go.id/
 // @version      3.0-260214
 // @description  Modular custom features for SIPD Dashboard
 // @author       Thio Van
 // @match        https://sipd.kemendagri.go.id/penatausahaan/*
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=go.id
+// @icon         https://sipd.kemendagri.go.id/penatausahaan/assets/progresive-web-app/favicon-32x32.png
 // @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
+// @updateURL    https://raw.githubusercontent.com/thiovan/sipd-mod/main/script.user.js
+// @downloadURL  https://raw.githubusercontent.com/thiovan/sipd-mod/main/script.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -642,7 +644,7 @@
   <div class="card-header">
     <div>
       <h1 class="card-title custom-class">Fitur Tambahan</h1>
-      <h1 class="card-subtitle custom-class">SIPD Mod by Thio Van</h1>
+      <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
     </div>
   </div>
   <div class="card-body p-6">
@@ -662,6 +664,60 @@
         <button name="clear" type="button" class="btn undefined btn inline-flex justify-center items-center bg-danger-500 text-white">
           <span class="btn-label">Bersihkan</span>
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 custom-class mt-5">
+  <div class="card-header">
+    <div>
+      <h1 class="card-title custom-class">Fitur Tambahan</h1>
+      <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
+    </div>
+  </div>
+  <div class="card-body p-6">
+    <h5 class="font-bold mb-2">Filter Per Sub Kegiatan</h5>
+    <div class="grid grid-cols-12 mb-5 gap-5">
+      <div class="col-span-12" id="subkeg-load-area">
+        <button name="load" type="button" class="w-full btn undefined btn inline-flex justify-center items-center bg-primary-500 text-white">
+          <span class="btn-label">Ambil Data</span>
+        </button>
+      </div>
+      <div class="col-span-12 hidden" id="subkeg-filter-area">
+        <div class="grid grid-cols-12 gap-5">
+          <div class="col-span-6">
+            <label class="block form-label">Sub SKPD</label>
+            <div class="my-chakra-select-wrapper">
+              <select name="subSkpd" class="my-chakra-select">
+                <option value="" disabled selected>Pilih Sub SKPD ...</option>
+              </select>
+              <div class="my-select-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></div>
+            </div>
+          </div>
+          <div class="col-span-6">
+            <label class="block form-label">Sub Kegiatan</label>
+            <div class="my-chakra-select-wrapper">
+              <select name="subKeg" class="my-chakra-select">
+                <option value="" disabled selected>Pilih Sub Kegiatan ...</option>
+              </select>
+              <div class="my-select-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></div>
+            </div>
+          </div>
+          <div class="col-span-12 flex items-end justify-between">
+            <div class="flex gap-2">
+              <button name="subkegView" type="button" class="btn undefined btn inline-flex justify-center items-center bg-success-500 text-white">
+                <span class="btn-label">Lihat</span>
+              </button>
+              <button name="subkegDownload" type="button" class="btn undefined btn inline-flex justify-center items-center bg-primary-500 text-white">
+                <span class="btn-label">Download</span>
+              </button>
+            </div>
+            <button name="subkegClear" type="button" class="btn undefined btn inline-flex justify-center items-center bg-danger-500 text-white">
+              <span class="btn-label">Bersihkan</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -751,6 +807,290 @@
           if (table) table.remove();
           el._lastFetchedData = null;
           console.log("[SIPD Mod] Table cleared");
+        });
+      }
+
+      // ╔══════════════════════════════════════════════════════╗
+      // ║       SUB KEGIATAN FILTER HANDLERS                  ║
+      // ╚══════════════════════════════════════════════════════╝
+
+      const loadBtn = el.querySelector("button[name='load']");
+      const loadArea = el.querySelector("#subkeg-load-area");
+      const filterArea = el.querySelector("#subkeg-filter-area");
+      const subSkpdSelect = el.querySelector("select[name='subSkpd']");
+      const subKegSelect = el.querySelector("select[name='subKeg']");
+      const subkegViewBtn = el.querySelector("button[name='subkegView']");
+      const subkegDownloadBtn = el.querySelector(
+        "button[name='subkegDownload']",
+      );
+      const subkegClearBtn = el.querySelector("button[name='subkegClear']");
+
+      // Stored fetched data for sub kegiatan section
+      let subkegData = null;
+
+      /** Populate a select with unique values */
+      const populateSelect = (
+        select,
+        items,
+        valueKey,
+        textKey,
+        placeholder,
+      ) => {
+        const seen = new Map();
+        items.forEach((item) => {
+          const v = item[valueKey];
+          if (v && !seen.has(v)) seen.set(v, item[textKey] || v);
+        });
+        select.innerHTML =
+          `<option value="" disabled selected>${placeholder}</option>` +
+          [...seen.entries()]
+            .sort((a, b) => a[1].localeCompare(b[1], "id"))
+            .map(([val, txt]) => `<option value="${val}">${txt}</option>`)
+            .join("");
+      };
+
+      /** Update sub kegiatan dropdown based on selected sub SKPD */
+      const updateSubKegOptions = () => {
+        if (!subkegData) return;
+        const selectedSkpd = subSkpdSelect.value;
+        const filtered = selectedSkpd
+          ? subkegData.filter((d) => d.kode_sub_skpd === selectedSkpd)
+          : subkegData;
+        populateSelect(
+          subKegSelect,
+          filtered,
+          "kode_sub_giat",
+          "nama_sub_giat",
+          "Pilih Sub Kegiatan ...",
+        );
+      };
+
+      /** Group+sum data by Nama Rekening for the selected sub kegiatan */
+      const getGroupedData = () => {
+        if (!subkegData) return [];
+        const skpd = subSkpdSelect.value;
+        const keg = subKegSelect.value;
+        const filtered = subkegData.filter(
+          (d) =>
+            (!skpd || d.kode_sub_skpd === skpd) &&
+            (!keg || d.kode_sub_giat === keg),
+        );
+
+        // Group by kode_rekening, sum nilai_realisasi
+        const groups = new Map();
+        filtered.forEach((d) => {
+          const key = d.kode_rekening || "-";
+          if (!groups.has(key)) {
+            groups.set(key, {
+              nama_sub_skpd: d.nama_sub_skpd || "-",
+              nama_sub_giat: d.nama_sub_giat || "-",
+              kode_rekening: key,
+              nama_rekening: d.nama_rekening || "-",
+              nilai_realisasi: 0,
+            });
+          }
+          groups.get(key).nilai_realisasi += Number(d.nilai_realisasi) || 0;
+        });
+        return [...groups.values()].sort((a, b) =>
+          a.kode_rekening.localeCompare(b.kode_rekening),
+        );
+      };
+
+      // ── Load Handler ──
+      if (loadBtn) {
+        loadBtn.addEventListener("click", () => {
+          const token = getAuthToken();
+          const currentMonth = new Date().getMonth() + 1;
+          setLoading(loadBtn, true);
+
+          fetchRealisasi(1, currentMonth, token)
+            .then((data) => {
+              subkegData = data;
+              console.log(
+                `[SIPD Mod] Sub Kegiatan: loaded ${data.length} records`,
+              );
+
+              // Populate Sub SKPD dropdown
+              populateSelect(
+                subSkpdSelect,
+                data,
+                "kode_sub_skpd",
+                "nama_sub_skpd",
+                "Pilih Sub SKPD ...",
+              );
+              updateSubKegOptions();
+
+              // Show filters, hide load button
+              loadArea.classList.add("hidden");
+              filterArea.classList.remove("hidden");
+            })
+            .catch((err) => console.error("[SIPD Mod] Load failed:", err))
+            .finally(() => setLoading(loadBtn, false));
+        });
+      }
+
+      // Sub SKPD change → update sub kegiatan options
+      if (subSkpdSelect)
+        subSkpdSelect.addEventListener("change", updateSubKegOptions);
+
+      // ── Sub Kegiatan View Handler ──
+      if (subkegViewBtn) {
+        subkegViewBtn.addEventListener("click", () => {
+          const grouped = getGroupedData();
+          const SUBCOLS = [
+            { label: "No", align: "text-center" },
+            { label: "Nama Sub SKPD", align: "" },
+            { label: "Nama Sub Kegiatan", align: "" },
+            { label: "Kode Rekening", align: "" },
+            { label: "Nama Rekening", align: "" },
+            { label: "Nilai Realisasi", align: "text-right" },
+          ];
+
+          const thead = SUBCOLS.map((c) => thCell(c.label, c.align)).join("");
+          let totalRealisasi = 0;
+          const rows = grouped
+            .map((g, i) => {
+              totalRealisasi += g.nilai_realisasi;
+              return `<tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700">
+              ${tdCell(i + 1, "text-center")}
+              ${tdCell(g.nama_sub_skpd)}
+              ${tdCell(g.nama_sub_giat)}
+              ${tdCell(g.kode_rekening, "whitespace-nowrap")}
+              ${tdCell(g.nama_rekening)}
+              ${tdCell(formatRupiah(g.nilai_realisasi), "text-right whitespace-nowrap")}
+            </tr>`;
+            })
+            .join("");
+
+          const container = document.createElement("div");
+          container.className = "mt-5 overflow-x-auto subkeg-table-container";
+          container.innerHTML = `
+            <p class="mb-2 text-sm text-slate-500 dark:text-slate-400">Total ${grouped.length} rekening</p>
+            <table class="w-full text-sm text-left border-collapse border border-slate-300 dark:border-slate-700">
+              <thead class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${thead}</tr></thead>
+              <tbody>${rows || `<tr><td colspan="6" class="p-4 text-center">Tidak ada data</td></tr>`}</tbody>
+              ${
+                grouped.length > 0
+                  ? `<tfoot class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>
+                <td colspan="5" class="p-2 border border-slate-300 dark:border-slate-700 text-right">Total</td>
+                ${tdCell(formatRupiah(totalRealisasi), "text-right whitespace-nowrap")}
+              </tr></tfoot>`
+                  : ""
+              }
+            </table>`;
+
+          const existing = el.querySelector(".subkeg-table-container");
+          if (existing) existing.remove();
+          filterArea.closest(".card-body").appendChild(container);
+        });
+      }
+
+      // ── Sub Kegiatan Download Handler ──
+      if (subkegDownloadBtn) {
+        subkegDownloadBtn.addEventListener("click", () => {
+          const grouped = getGroupedData();
+          if (!grouped.length) return;
+
+          const wb = XLSX.utils.book_new();
+          const border = {
+            top: { style: "thin" },
+            bottom: { style: "thin" },
+            left: { style: "thin" },
+            right: { style: "thin" },
+          };
+          const sH = {
+            font: { bold: true },
+            alignment: {
+              horizontal: "center",
+              vertical: "center",
+              wrapText: true,
+            },
+            border,
+            fill: { fgColor: { rgb: "D9E1F2" } },
+          };
+          const sT = {
+            font: { bold: true, sz: 14 },
+            alignment: { horizontal: "center" },
+          };
+          const sL = {
+            alignment: { vertical: "center", wrapText: true },
+            border,
+          };
+          const sC = {
+            alignment: { horizontal: "center", vertical: "center" },
+            border,
+          };
+          const sM = {
+            alignment: { horizontal: "right", vertical: "center" },
+            border,
+            numFmt: '"Rp."#,##0',
+          };
+
+          const headers = [
+            "No",
+            "Nama Sub SKPD",
+            "Nama Sub Kegiatan",
+            "Kode Rekening",
+            "Nama Rekening",
+            "Nilai Realisasi",
+          ];
+          const aoa = [
+            [{ v: "REALISASI PER SUB KEGIATAN", t: "s", s: sT }],
+            [],
+            headers.map((h) => ({ v: h, t: "s", s: sH })),
+          ];
+
+          let total = 0;
+          grouped.forEach((g, i) => {
+            total += g.nilai_realisasi;
+            aoa.push([
+              { v: String(i + 1), t: "s", s: sC },
+              { v: g.nama_sub_skpd, t: "s", s: sL },
+              { v: g.nama_sub_giat, t: "s", s: sL },
+              { v: g.kode_rekening, t: "s", s: sC },
+              { v: g.nama_rekening, t: "s", s: sL },
+              { v: g.nilai_realisasi, t: "n", z: '"Rp."#,##0', s: sM },
+            ]);
+          });
+
+          aoa.push([
+            { v: "Total", t: "s", s: sH },
+            { v: "", t: "s", s: sH },
+            { v: "", t: "s", s: sH },
+            { v: "", t: "s", s: sH },
+            { v: "", t: "s", s: sH },
+            {
+              v: total,
+              t: "n",
+              z: '"Rp."#,##0',
+              s: { ...sM, font: { bold: true } },
+            },
+          ]);
+
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws["!cols"] = [
+            { wch: 6 },
+            { wch: 35 },
+            { wch: 40 },
+            { wch: 20 },
+            { wch: 40 },
+            { wch: 22 },
+          ];
+          ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+
+          XLSX.utils.book_append_sheet(wb, ws, "Realisasi Per Sub Kegiatan");
+          XLSX.writeFile(wb, "Realisasi Per Sub Kegiatan.xlsx");
+          console.log("[SIPD Mod] Sub Kegiatan Excel downloaded");
+        });
+      }
+
+      // ── Sub Kegiatan Clear Handler ──
+      if (subkegClearBtn) {
+        subkegClearBtn.addEventListener("click", () => {
+          const table = el.querySelector(".subkeg-table-container");
+          if (table) table.remove();
+          // Keep subkegData cached — don't fetch again
+          console.log("[SIPD Mod] Sub Kegiatan table cleared");
         });
       }
     },
