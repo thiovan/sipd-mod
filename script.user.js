@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SIPD Mod by Thio Van
 // @namespace    https://sipd.kemendagri.go.id/
-// @version      3.0-260214
+// @version      3.1-260214
 // @description  Modular custom features for SIPD Dashboard
 // @author       Thio Van
 // @match        https://sipd.kemendagri.go.id/penatausahaan/*
@@ -40,10 +40,7 @@
     "Desember",
   ];
 
-  /**
-   * Column definitions — single source of truth for table + Excel.
-   * @type {Array<{key: string, label: string, thLabel?: string, align: string, format?: string, totalKey?: string}>}
-   */
+  // Column definitions for 46-col realisasi table (single source of truth)
   const COLUMNS = [
     { key: "_rowNum", label: "Nomor", thLabel: "No", align: "center" },
     { key: "kode_skpd", label: "Kode SKPD", align: "left" },
@@ -184,6 +181,39 @@
     20, 14, 20, 14, 20, 14, 14, 18,
   ];
 
+  // Shared Excel cell styles
+  const XL_BORDER = {
+    top: { style: "thin" },
+    bottom: { style: "thin" },
+    left: { style: "thin" },
+    right: { style: "thin" },
+  };
+  const XL = {
+    header: {
+      font: { bold: true },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: XL_BORDER,
+      fill: { fgColor: { rgb: "D9E1F2" } },
+    },
+    title: {
+      font: { bold: true, sz: 14 },
+      alignment: { horizontal: "center" },
+    },
+    center: {
+      alignment: { horizontal: "center", vertical: "center" },
+      border: XL_BORDER,
+    },
+    left: {
+      alignment: { vertical: "center", wrapText: true },
+      border: XL_BORDER,
+    },
+    money: {
+      alignment: { horizontal: "right", vertical: "center" },
+      border: XL_BORDER,
+      numFmt: '"Rp."#,##0',
+    },
+  };
+
   // ╔══════════════════════════════════════════════════════════╗
   // ║                  UTILITY FUNCTIONS                      ║
   // ╚══════════════════════════════════════════════════════════╝
@@ -200,22 +230,13 @@
       return dateStr;
     }
   };
-
   const formatRupiah = (val) => (Number(val) || 0).toLocaleString("id-ID");
-
   const getAuthToken = () => document.cookie.match(/X-SIPD-PU-TK=([^;]+)/)?.[1];
-
   const getMonthRange = (el) => ({
     start: parseInt(el.querySelector("select[name='bulanAwal']").value),
     end: parseInt(el.querySelector("select[name='bulanAkhir']").value),
   });
 
-  /**
-   * Run async functions with a concurrency limit.
-   * @param {Array<() => Promise>} fns - Lazy promise factories
-   * @param {number} limit - Max concurrent
-   * @returns {Promise<Array>}
-   */
   function throttleAll(fns, limit) {
     const results = [];
     let idx = 0;
@@ -227,16 +248,11 @@
         return run();
       });
     };
-    const workers = Array.from({ length: Math.min(limit, fns.length) }, () =>
-      run(),
-    );
-    return Promise.all(workers).then(() => results);
+    return Promise.all(
+      Array.from({ length: Math.min(limit, fns.length) }, () => run()),
+    ).then(() => results);
   }
 
-  /**
-   * Fetch realisasi data for a month range, throttled.
-   * Returns a flat array of all items.
-   */
   function fetchRealisasi(startMonth, endMonth, token) {
     const tasks = [];
     for (let i = startMonth; i <= endMonth; i++) {
@@ -258,7 +274,6 @@
     });
   }
 
-  /** Get cell value for a column definition */
   function getCellValue(item, col, rowNum) {
     if (col.key === "_rowNum") return rowNum;
     const raw = item[col.key];
@@ -267,7 +282,6 @@
     return raw || "-";
   }
 
-  /** Compute totals from data array */
   function computeTotals(data) {
     const t = { realisasi: 0, setoran: 0, spd: 0, sp2d: 0 };
     data.forEach((item) => {
@@ -278,32 +292,97 @@
     return t;
   }
 
-  // ── HTML Table Generators ──────────────────────────────────
+  /** Populate a <select> with unique sorted values from data */
+  function populateSelect(select, items, valueKey, textKey, placeholder) {
+    const seen = new Map();
+    items.forEach((item) => {
+      const v = item[valueKey];
+      if (v && !seen.has(v)) seen.set(v, item[textKey] || v);
+    });
+    select.innerHTML =
+      `<option value="" disabled selected>${placeholder}</option>` +
+      [...seen.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], "id"))
+        .map(([v, t]) => `<option value="${v}">${t}</option>`)
+        .join("");
+  }
 
+  /** Chakra-style loading state for buttons */
+  function setLoading(btn, loading) {
+    const label = btn.querySelector(".btn-label");
+    if (loading) {
+      btn.disabled = true;
+      btn._origText = label.textContent;
+      label.innerHTML = '<span class="sipd-spinner"></span> Mohon Tunggu ...';
+    } else {
+      btn.disabled = false;
+      label.textContent = btn._origText || label.textContent;
+    }
+  }
+
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║                  HTML GENERATORS                        ║
+  // ╚══════════════════════════════════════════════════════════╝
+
+  const CELL_CLS = "p-2 border border-slate-300 dark:border-slate-700";
   const tdCell = (text, cls = "") =>
-    `<td class="p-2 border border-slate-300 dark:border-slate-700 ${cls}">${text}</td>`;
+    `<td class="${CELL_CLS} ${cls}">${text}</td>`;
   const thCell = (text, cls = "") =>
-    `<th class="p-2 border border-slate-300 dark:border-slate-700 ${cls}">${text}</th>`;
+    `<th class="${CELL_CLS} ${cls}">${text}</th>`;
+  const alignCls = (a) =>
+    a === "center" ? "text-center" : a === "right" ? "text-right" : "";
+
+  const selectWrapper = (name, label, optionsHtml = "") => `
+    <div class="col-span-6">
+      <label class="block form-label">${label}</label>
+      <div class="my-chakra-select-wrapper">
+        <select name="${name}" class="my-chakra-select">${optionsHtml}</select>
+        <div class="my-select-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></div>
+      </div>
+    </div>`;
+
+  const monthOptions = BULAN.map(
+    (b, i) => `<option value="${i + 1}">${b}</option>`,
+  ).join("");
+  const monthSelect = (name, label) =>
+    selectWrapper(
+      name,
+      label,
+      `<option value="" disabled selected>Pilih bulan disini ...</option>${monthOptions}`,
+    );
+
+  const btnHtml = (name, label, color) =>
+    `<button name="${name}" type="button" class="btn undefined btn inline-flex justify-center items-center bg-${color}-500 text-white"><span class="btn-label">${label}</span></button>`;
+
+  const actionButtons = (viewName, downloadName, clearName) => `
+    <div class="col-span-12 flex items-end justify-between">
+      <div class="flex gap-2">${btnHtml(viewName, "Lihat", "success")}${btnHtml(downloadName, "Download", "primary")}</div>
+      ${btnHtml(clearName, "Bersihkan", "danger")}
+    </div>`;
+
+  const cardWrapper = (sectionTitle, content) => `
+<div class="card rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 custom-class mt-5">
+  <div class="card-header"><div>
+    <h1 class="card-title custom-class">Fitur Tambahan</h1>
+    <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
+  </div></div>
+  <div class="card-body p-6">
+    <h5 class="font-bold mb-2">${sectionTitle}</h5>
+    <div class="grid grid-cols-12 mb-5 gap-5">${content}</div>
+  </div>
+</div>`;
+
+  // ── COLUMNS-driven table rendering ────────────────────────
 
   function renderTableHeaders() {
-    return COLUMNS.map((col) =>
-      thCell(
-        col.thLabel || col.label,
-        col.align === "center"
-          ? "text-center"
-          : col.align === "right"
-            ? "text-right"
-            : "",
-      ),
-    ).join("\n");
+    return COLUMNS.map((c) =>
+      thCell(c.thLabel || c.label, alignCls(c.align)),
+    ).join("");
   }
 
   function renderTableRow(item, rowNum) {
     const cells = COLUMNS.map((col) => {
-      const val = getCellValue(item, col, rowNum);
-      let cls = "";
-      if (col.align === "center") cls = "text-center";
-      else if (col.align === "right") cls = "text-right";
+      let cls = alignCls(col.align);
       if (
         col.format === "date" ||
         col.key.startsWith("kode_") ||
@@ -311,9 +390,8 @@
         col.key.startsWith("nip_")
       )
         cls += " whitespace-nowrap";
-      return tdCell(val, cls.trim());
-    }).join("\n");
-
+      return tdCell(getCellValue(item, col, rowNum), cls.trim());
+    }).join("");
     return `<tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700">${cells}</tr>`;
   }
 
@@ -322,110 +400,129 @@
     COLUMNS.forEach((col, i) => {
       if (col.totalKey) totalColIdx[col.totalKey] = i;
     });
-
-    // First total column determines the colspan for "Total" label
-    const firstTotalIdx = Math.min(...Object.values(totalColIdx));
+    const first = Math.min(...Object.values(totalColIdx));
     const cells = COLUMNS.map((col, i) => {
       if (i === 0)
-        return `<td colspan="${firstTotalIdx}" class="p-2 border border-slate-300 dark:border-slate-700 text-right font-bold">Total</td>`;
-      if (i > 0 && i < firstTotalIdx) return ""; // covered by colspan
+        return `<td colspan="${first}" class="${CELL_CLS} text-right font-bold">Total</td>`;
+      if (i > 0 && i < first) return "";
       if (col.totalKey)
         return tdCell(
           formatRupiah(totals[col.totalKey]),
           "text-right whitespace-nowrap font-bold",
         );
-      return `<td class="p-2 border border-slate-300 dark:border-slate-700"></td>`;
-    }).join("\n");
-
+      return `<td class="${CELL_CLS}"></td>`;
+    }).join("");
     return `<tfoot class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${cells}</tr></tfoot>`;
   }
 
-  // ── Excel Generators ───────────────────────────────────────
+  /** Generic simple table renderer (for sub kegiatan etc.) */
+  function renderSimpleTable({ colDefs, data, containerClass, countLabel }) {
+    const thead = colDefs
+      .map((c) => thCell(c.label, alignCls(c.align || "left")))
+      .join("");
+    let total = 0;
+    const rows = data
+      .map((item, i) => {
+        const cells = colDefs
+          .map((c) => {
+            if (c.key === "_rowNum") return tdCell(i + 1, "text-center");
+            const val =
+              c.format === "rupiah"
+                ? formatRupiah(item[c.key])
+                : item[c.key] || "-";
+            if (c.totalKey) total += Number(item[c.key]) || 0;
+            return tdCell(
+              val,
+              `${alignCls(c.align || "left")}${c.format === "rupiah" ? " whitespace-nowrap" : ""}`,
+            );
+          })
+          .join("");
+        return `<tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700">${cells}</tr>`;
+      })
+      .join("");
 
+    const hasTotals = colDefs.some((c) => c.totalKey);
+    const tfoot =
+      hasTotals && data.length > 0
+        ? `<tfoot class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>
+          <td colspan="${colDefs.length - 1}" class="${CELL_CLS} text-right">Total</td>
+          ${tdCell(formatRupiah(total), "text-right whitespace-nowrap")}
+        </tr></tfoot>`
+        : "";
+
+    return `<div class="mt-5 overflow-x-auto ${containerClass}">
+      <p class="mb-2 text-sm text-slate-500 dark:text-slate-400">Total ${data.length} ${countLabel}</p>
+      <table class="w-full text-sm text-left border-collapse border border-slate-300 dark:border-slate-700">
+        <thead class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${thead}</tr></thead>
+        <tbody>${rows || `<tr><td colspan="${colDefs.length}" class="p-4 text-center">Tidak ada data</td></tr>`}</tbody>
+        ${tfoot}
+      </table>
+    </div>`;
+  }
+
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║                  EXCEL GENERATORS                       ║
+  // ╚══════════════════════════════════════════════════════════╝
+
+  /** Build 46-col realisasi workbook (COLUMNS-driven) */
   function buildExcelWorkbook(data) {
     const wb = XLSX.utils.book_new();
-
-    // Compact styles
-    const border = {
-      top: { style: "thin" },
-      bottom: { style: "thin" },
-      left: { style: "thin" },
-      right: { style: "thin" },
-    };
-    const S = {
-      header: {
-        font: { bold: true },
-        alignment: { horizontal: "center", vertical: "center", wrapText: true },
-        border,
-        fill: { fgColor: { rgb: "D9E1F2" } },
-      },
-      title: {
-        font: { bold: true, sz: 14 },
-        alignment: { horizontal: "center" },
-      },
-      center: {
-        alignment: { horizontal: "center", vertical: "center" },
-        border,
-      },
-      left: { alignment: { vertical: "center", wrapText: true }, border },
-      money: {
-        alignment: { horizontal: "right", vertical: "center" },
-        border,
-        numFmt: '"Rp."#,##0',
-      },
-    };
-
     const headers = COLUMNS.map((c) => c.label);
-    const hRow = headers.map((v) => ({ v, t: "s", s: S.header }));
-
+    const hRow = headers.map((v) => ({ v, t: "s", s: XL.header }));
     const aoa = [
-      [{ v: "LAPORAN REALISASI PER DOKUMEN", t: "s", s: S.title }],
-      [{ v: "", t: "s", s: S.title }],
-      [{ v: "", t: "s", s: S.title }],
+      [{ v: "LAPORAN REALISASI PER DOKUMEN", t: "s", s: XL.title }],
+      [{ v: "", t: "s", s: XL.title }],
+      [{ v: "", t: "s", s: XL.title }],
       [],
       hRow,
     ];
 
     const totals = { realisasi: 0, setoran: 0, spd: 0, sp2d: 0 };
     let r = 1;
-
     data.forEach((item) => {
       COLUMNS.forEach((col) => {
         if (col.totalKey) totals[col.totalKey] += Number(item[col.key]) || 0;
       });
-
-      const row = COLUMNS.map((col) => {
-        if (col.key === "_rowNum") return { v: String(r), t: "s", s: S.center };
-        if (col.format === "rupiah")
+      aoa.push(
+        COLUMNS.map((col) => {
+          if (col.key === "_rowNum")
+            return { v: String(r), t: "s", s: XL.center };
+          if (col.format === "rupiah")
+            return {
+              v: Number(item[col.key]) || 0,
+              t: "n",
+              z: '"Rp."#,##0',
+              s: XL.money,
+            };
+          if (col.format === "date")
+            return {
+              v: String(formatDate(item[col.key])),
+              t: "s",
+              s: XL.center,
+            };
           return {
-            v: Number(item[col.key]) || 0,
-            t: "n",
-            z: '"Rp."#,##0',
-            s: S.money,
+            v: String(item[col.key] || ""),
+            t: "s",
+            s: col.align === "center" ? XL.center : XL.left,
           };
-        if (col.format === "date")
-          return { v: String(formatDate(item[col.key])), t: "s", s: S.center };
-        const style = col.align === "center" ? S.center : S.left;
-        return { v: String(item[col.key] || ""), t: "s", s: style };
-      });
-
-      aoa.push(row);
+        }),
+      );
       r++;
     });
 
-    // Totals row
-    const totalRow = COLUMNS.map((col, idx) => {
-      if (idx === 0) return { v: "Total", t: "s", s: S.header };
-      if (col.totalKey)
-        return {
-          v: totals[col.totalKey],
-          t: "n",
-          z: '"Rp."#,##0',
-          s: { ...S.money, font: { bold: true } },
-        };
-      return { v: "", t: "s", s: S.header };
-    });
-    aoa.push(totalRow);
+    aoa.push(
+      COLUMNS.map((col, i) => {
+        if (i === 0) return { v: "Total", t: "s", s: XL.header };
+        if (col.totalKey)
+          return {
+            v: totals[col.totalKey],
+            t: "n",
+            z: '"Rp."#,##0',
+            s: { ...XL.money, font: { bold: true } },
+          };
+        return { v: "", t: "s", s: XL.header };
+      }),
+    );
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = COL_WIDTHS.map((wch) => ({ wch }));
@@ -433,26 +530,77 @@
       s: { r, c: 0 },
       e: { r, c: headers.length - 1 },
     }));
-
     XLSX.utils.book_append_sheet(wb, ws, "Data Realisasi Dokumen");
     return wb;
+  }
+
+  /** Generic simple Excel builder (for sub kegiatan etc.) */
+  function buildSimpleExcel({ title, colDefs, data, sheetName, filename }) {
+    const wb = XLSX.utils.book_new();
+    const headers = colDefs.map((c) => c.label);
+    const aoa = [
+      [{ v: title, t: "s", s: XL.title }],
+      [],
+      headers.map((h) => ({ v: h, t: "s", s: XL.header })),
+    ];
+
+    let total = 0;
+    data.forEach((item, i) => {
+      aoa.push(
+        colDefs.map((c) => {
+          if (c.key === "_rowNum")
+            return { v: String(i + 1), t: "s", s: XL.center };
+          if (c.format === "rupiah") {
+            if (c.totalKey) total += Number(item[c.key]) || 0;
+            return {
+              v: Number(item[c.key]) || 0,
+              t: "n",
+              z: '"Rp."#,##0',
+              s: XL.money,
+            };
+          }
+          return {
+            v: String(item[c.key] || ""),
+            t: "s",
+            s: c.align === "center" ? XL.center : XL.left,
+          };
+        }),
+      );
+    });
+
+    const totalRow = colDefs.map((c, i) => {
+      if (c.totalKey)
+        return {
+          v: total,
+          t: "n",
+          z: '"Rp."#,##0',
+          s: { ...XL.money, font: { bold: true } },
+        };
+      return { v: i === 0 ? "Total" : "", t: "s", s: XL.header };
+    });
+    aoa.push(totalRow);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = colDefs.map((c) => ({ wch: c.width || 20 }));
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
   }
 
   // ╔══════════════════════════════════════════════════════════╗
   // ║                    CORE FRAMEWORK                       ║
   // ╚══════════════════════════════════════════════════════════╝
 
-  /** @type {ModuleDefinition[]} */
   const modules = [];
   const mountedModules = new Map();
 
   function registerModule(moduleDef) {
-    const defaults = {
+    modules.push({
       insertPosition: "afterend",
       waitForReady: true,
       mountDelay: 0,
-    };
-    modules.push({ ...defaults, ...moduleDef });
+      ...moduleDef,
+    });
     console.log(`[SIPD Mod] Module registered: ${moduleDef.id}`);
   }
 
@@ -462,7 +610,6 @@
       callback(existing);
       return;
     }
-
     let resolved = false;
     const resolve = () => {
       const el = document.querySelector(selector);
@@ -473,7 +620,6 @@
         callback(el);
       }
     };
-
     const observer = new MutationObserver(resolve);
     observer.observe(document.body, {
       childList: true,
@@ -481,14 +627,13 @@
       attributes: true,
       attributeFilter: ["style", "class"],
     });
-
     const pollId = setInterval(resolve, 500);
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
         observer.disconnect();
         clearInterval(pollId);
-        console.warn(`[SIPD Mod] Timeout waiting for: ${selector}`);
+        console.warn(`[SIPD Mod] Timeout: ${selector}`);
       }
     }, timeout);
   }
@@ -497,18 +642,14 @@
     return new Promise((resolve) => {
       const check = () => {
         const s = getComputedStyle(el);
-        const opacity = parseFloat(s.opacity);
-        if (
-          opacity >= 1 &&
-          !(s.transition && s.transition !== "none" && opacity < 1)
-        ) {
+        const o = parseFloat(s.opacity);
+        if (o >= 1 && !(s.transition && s.transition !== "none" && o < 1)) {
           resolve(el);
           return true;
         }
         return false;
       };
       if (check()) return;
-
       const onEnd = () => {
         el.removeEventListener("transitionend", onEnd);
         clearInterval(fb);
@@ -531,14 +672,12 @@
 
   function mountModule(mod) {
     if (document.querySelector(`[${SIPD_MOD_ATTR}="${mod.id}"]`)) return;
-
     waitForElement(mod.targetSelector, async (target) => {
       if (document.querySelector(`[${SIPD_MOD_ATTR}="${mod.id}"]`)) return;
       if (mod.waitForReady) await waitForAnimationEnd(target);
       if (mod.mountDelay > 0)
         await new Promise((r) => setTimeout(r, mod.mountDelay));
       if (document.querySelector(`[${SIPD_MOD_ATTR}="${mod.id}"]`)) return;
-
       const wrapper = document.createElement("div");
       wrapper.setAttribute(SIPD_MOD_ATTR, mod.id);
       wrapper.innerHTML = mod.render();
@@ -568,13 +707,10 @@
     );
   }
 
-  // ── SPA Navigation ────────────────────────────────────────
-
   if (window.navigation)
     window.navigation.addEventListener("navigatesuccess", evaluateModules);
   window.addEventListener("popstate", () => setTimeout(evaluateModules, 300));
-
-  (function initialEvaluate() {
+  (function init() {
     const ready =
       document.readyState === "loading"
         ? new Promise((r) => document.addEventListener("DOMContentLoaded", r))
@@ -589,34 +725,36 @@
   // ║                     MODULES                             ║
   // ╚══════════════════════════════════════════════════════════╝
 
-  // ── Shared HTML fragments ─────────────────────────────────
+  // Sub Kegiatan column definitions
+  const SUBKEG_COLS = [
+    { key: "_rowNum", label: "No", width: 6, align: "center" },
+    { key: "nama_sub_skpd", label: "Nama Sub SKPD", width: 35, align: "left" },
+    {
+      key: "nama_sub_giat",
+      label: "Nama Sub Kegiatan",
+      width: 40,
+      align: "left",
+    },
+    {
+      key: "kode_rekening",
+      label: "Kode Rekening",
+      width: 20,
+      align: "center",
+    },
+    { key: "nama_rekening", label: "Nama Rekening", width: 40, align: "left" },
+    {
+      key: "nilai_realisasi",
+      label: "Nilai Realisasi",
+      width: 22,
+      align: "right",
+      format: "rupiah",
+      totalKey: "realisasi",
+    },
+  ];
 
-  const monthOptions = BULAN.map(
-    (b, i) => `<option value="${i + 1}">${b}</option>`,
-  ).join("");
-
-  const monthSelect = (name, label) => `
-    <div class="col-span-6">
-      <label class="block form-label">${label}</label>
-      <div class="relative">
-        <div class="my-chakra-select-wrapper">
-          <select name="${name}" class="my-chakra-select">
-            <option value="" disabled selected>Pilih bulan disini ...</option>
-            ${monthOptions}
-          </select>
-          <div class="my-select-icon">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
-              <path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path>
-            </svg>
-          </div>
-        </div>
-      </div>
-    </div>`;
-
-  // ===== MODULE: Realisasi — Filter Tambahan =====
   registerModule({
     id: "realisasi-filter",
-    name: "Filter Tambahan",
+    name: "Fitur Tambahan",
     urlPattern: "/pengeluaran/laporan/realisasi",
     targetSelector: "div.container-fluid",
     insertPosition: "beforeend",
@@ -626,261 +764,126 @@
     render: () => `
 <style>
   .my-chakra-select-wrapper { position: relative; width: 100%; }
-  .my-chakra-select {
-    width: 100%; outline: none; appearance: none;
-    font-size: var(--chakra-fontSizes-md);
-    padding-left: var(--chakra-space-4); padding-right: var(--chakra-space-8);
-    height: var(--chakra-sizes-10); border-radius: var(--chakra-radii-md);
-    border: 1px solid var(--chakra-colors-gray-200);
-    background: var(--chakra-colors-white); color: var(--chakra-colors-gray-800);
-  }
+  .my-chakra-select { width: 100%; outline: none; appearance: none; font-size: var(--chakra-fontSizes-md); padding-left: var(--chakra-space-4); padding-right: var(--chakra-space-8); height: var(--chakra-sizes-10); border-radius: var(--chakra-radii-md); border: 1px solid var(--chakra-colors-gray-200); background: var(--chakra-colors-white); color: var(--chakra-colors-gray-800); }
   .my-chakra-select:focus { border-color: var(--chakra-colors-blue-500); box-shadow: 0 0 0 1px var(--chakra-colors-blue-500); }
   .my-select-icon { position: absolute; top: 50%; right: var(--chakra-space-2); transform: translateY(-50%); pointer-events: none; color: var(--chakra-colors-gray-400); font-size: 1.25rem; display: flex; }
   @keyframes sipd-spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   .sipd-spinner { display: inline-block; width: 1em; height: 1em; border: 2px solid currentColor; border-bottom-color: transparent; border-radius: 50%; animation: sipd-spinner 0.45s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
   .btn[disabled] { opacity: 0.6; cursor: not-allowed; pointer-events: none; }
 </style>
-<div class="card rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 custom-class mt-5">
-  <div class="card-header">
-    <div>
-      <h1 class="card-title custom-class">Fitur Tambahan</h1>
-      <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
+${cardWrapper(
+  "Filter Periode Bulan",
+  `
+  ${monthSelect("bulanAwal", "Bulan Awal")}
+  ${monthSelect("bulanAkhir", "Bulan Akhir")}
+  ${actionButtons("view", "download", "clear")}
+`,
+)}
+${cardWrapper(
+  "Filter Per Sub Kegiatan",
+  `
+  <div class="col-span-12" id="subkeg-load-area">
+    ${btnHtml("load", "Ambil Data", "primary").replace('class="btn', 'class="w-full btn')}
+  </div>
+  <div class="col-span-12 hidden" id="subkeg-filter-area">
+    <div class="grid grid-cols-12 gap-5">
+      ${selectWrapper("subSkpd", "Sub SKPD", '<option value="" disabled selected>Pilih Sub SKPD ...</option>')}
+      ${selectWrapper("subKeg", "Sub Kegiatan", '<option value="" disabled selected>Pilih Sub Kegiatan ...</option>')}
+      ${actionButtons("subkegView", "subkegDownload", "subkegClear")}
     </div>
   </div>
-  <div class="card-body p-6">
-    <h5 class="font-bold mb-2">Filter Periode Bulan</h5>
-    <div class="grid grid-cols-12 mb-5 gap-5">
-      ${monthSelect("bulanAwal", "Bulan Awal")}
-      ${monthSelect("bulanAkhir", "Bulan Akhir")}
-      <div class="col-span-12 flex items-end justify-between">
-        <div class="flex gap-2">
-          <button name="view" type="button" class="btn undefined btn inline-flex justify-center items-center bg-success-500 text-white">
-            <span class="btn-label">Lihat</span>
-          </button>
-          <button name="download" type="button" class="btn undefined btn inline-flex justify-center items-center bg-primary-500 text-white">
-            <span class="btn-label">Download</span>
-          </button>
-        </div>
-        <button name="clear" type="button" class="btn undefined btn inline-flex justify-center items-center bg-danger-500 text-white">
-          <span class="btn-label">Bersihkan</span>
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="card rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 custom-class mt-5">
-  <div class="card-header">
-    <div>
-      <h1 class="card-title custom-class">Fitur Tambahan</h1>
-      <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
-    </div>
-  </div>
-  <div class="card-body p-6">
-    <h5 class="font-bold mb-2">Filter Per Sub Kegiatan</h5>
-    <div class="grid grid-cols-12 mb-5 gap-5">
-      <div class="col-span-12" id="subkeg-load-area">
-        <button name="load" type="button" class="w-full btn undefined btn inline-flex justify-center items-center bg-primary-500 text-white">
-          <span class="btn-label">Ambil Data</span>
-        </button>
-      </div>
-      <div class="col-span-12 hidden" id="subkeg-filter-area">
-        <div class="grid grid-cols-12 gap-5">
-          <div class="col-span-6">
-            <label class="block form-label">Sub SKPD</label>
-            <div class="my-chakra-select-wrapper">
-              <select name="subSkpd" class="my-chakra-select">
-                <option value="" disabled selected>Pilih Sub SKPD ...</option>
-              </select>
-              <div class="my-select-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></div>
-            </div>
-          </div>
-          <div class="col-span-6">
-            <label class="block form-label">Sub Kegiatan</label>
-            <div class="my-chakra-select-wrapper">
-              <select name="subKeg" class="my-chakra-select">
-                <option value="" disabled selected>Pilih Sub Kegiatan ...</option>
-              </select>
-              <div class="my-select-icon"><svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"></path></svg></div>
-            </div>
-          </div>
-          <div class="col-span-12 flex items-end justify-between">
-            <div class="flex gap-2">
-              <button name="subkegView" type="button" class="btn undefined btn inline-flex justify-center items-center bg-success-500 text-white">
-                <span class="btn-label">Lihat</span>
-              </button>
-              <button name="subkegDownload" type="button" class="btn undefined btn inline-flex justify-center items-center bg-primary-500 text-white">
-                <span class="btn-label">Download</span>
-              </button>
-            </div>
-            <button name="subkegClear" type="button" class="btn undefined btn inline-flex justify-center items-center bg-danger-500 text-white">
-              <span class="btn-label">Bersihkan</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>`,
+`,
+)}`,
 
     onMount: (el) => {
-      const viewBtn = el.querySelector("button[name='view']");
-      const downloadBtn = el.querySelector("button[name='download']");
+      const $ = (sel) => el.querySelector(sel);
+      const btn = (name) => $(`button[name='${name}']`);
+      const sel = (name) => $(`select[name='${name}']`);
 
-      const setLoading = (btn, loading) => {
-        const label = btn.querySelector(".btn-label");
-        if (loading) {
-          btn.disabled = true;
-          btn._originalText = label.textContent;
-          label.innerHTML =
-            '<span class="sipd-spinner"></span> Mohon Tunggu ...';
-        } else {
-          btn.disabled = false;
-          label.textContent = btn._originalText || label.textContent;
-        }
-      };
+      // ── Filter Periode Bulan ──────────────────────────────
 
-      // ── View Handler ──
-      if (viewBtn) {
-        viewBtn.addEventListener("click", () => {
-          const { start, end } = getMonthRange(el);
-          const token = getAuthToken();
-          setLoading(viewBtn, true);
+      btn("view")?.addEventListener("click", () => {
+        const { start, end } = getMonthRange(el);
+        setLoading(btn("view"), true);
 
-          fetchRealisasi(start, end, token)
-            .then((data) => {
-              el._lastFetchedData = data;
+        fetchRealisasi(start, end, getAuthToken())
+          .then((data) => {
+            el._lastFetchedData = data;
+            const totals = computeTotals(data);
+            let rows = "";
+            data.forEach((item, i) => {
+              rows += renderTableRow(item, i + 1);
+            });
 
-              const totals = computeTotals(data);
-              let rows = "";
-              data.forEach((item, i) => {
-                rows += renderTableRow(item, i + 1);
-              });
+            const container = document.createElement("div");
+            container.className = "mt-5 overflow-x-auto table-result-container";
+            container.innerHTML = `
+              <p class="mb-2 text-sm text-slate-500 dark:text-slate-400">Total ${data.length} dokumen</p>
+              <table class="w-full text-sm text-left border-collapse border border-slate-300 dark:border-slate-700">
+                <thead class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${renderTableHeaders()}</tr></thead>
+                <tbody>${rows || `<tr><td colspan="${COLUMNS.length}" class="p-4 text-center">Tidak ada data</td></tr>`}</tbody>
+                ${data.length > 0 ? renderTableFooter(totals) : ""}
+              </table>`;
 
-              const container = document.createElement("div");
-              container.className =
-                "mt-5 overflow-x-auto table-result-container";
-              container.innerHTML = `
-                <p class="mb-2 text-sm text-slate-500 dark:text-slate-400">Total ${data.length} dokumen</p>
-                <table class="w-full text-sm text-left border-collapse border border-slate-300 dark:border-slate-700">
-                  <thead class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${renderTableHeaders()}</tr></thead>
-                  <tbody>${rows || `<tr><td colspan="${COLUMNS.length}" class="p-4 text-center">Tidak ada data</td></tr>`}</tbody>
-                  ${data.length > 0 ? renderTableFooter(totals) : ""}
-                </table>`;
+            $(".table-result-container")?.remove();
+            $(".card-body").appendChild(container);
+          })
+          .catch((err) => console.error("[SIPD Mod] View failed:", err))
+          .finally(() => setLoading(btn("view"), false));
+      });
 
-              const existing = el.querySelector(".table-result-container");
-              if (existing) existing.remove();
-              el.querySelector(".card-body").appendChild(container);
-            })
-            .catch((err) => console.error("[SIPD Mod] View failed:", err))
-            .finally(() => setLoading(viewBtn, false));
-        });
-      }
+      btn("download")?.addEventListener("click", () => {
+        setLoading(btn("download"), true);
+        const dataP = el._lastFetchedData
+          ? Promise.resolve(el._lastFetchedData)
+          : fetchRealisasi(...Object.values(getMonthRange(el)), getAuthToken());
+        dataP
+          .then((data) => {
+            XLSX.writeFile(
+              buildExcelWorkbook(data),
+              "Laporan Realisasi Per Dokumen.xlsx",
+            );
+          })
+          .catch((err) => console.error("[SIPD Mod] Download failed:", err))
+          .finally(() => setLoading(btn("download"), false));
+      });
 
-      // ── Download Handler ──
-      if (downloadBtn) {
-        downloadBtn.addEventListener("click", () => {
-          const { start, end } = getMonthRange(el);
-          const token = getAuthToken();
-          setLoading(downloadBtn, true);
+      btn("clear")?.addEventListener("click", () => {
+        $(".table-result-container")?.remove();
+        el._lastFetchedData = null;
+      });
 
-          const dataPromise = el._lastFetchedData
-            ? Promise.resolve(el._lastFetchedData)
-            : fetchRealisasi(start, end, token);
+      // ── Filter Per Sub Kegiatan ───────────────────────────
 
-          dataPromise
-            .then((data) => {
-              const wb = buildExcelWorkbook(data);
-              XLSX.writeFile(wb, "Laporan Realisasi Per Dokumen.xlsx");
-              console.log("[SIPD Mod] Excel downloaded successfully");
-            })
-            .catch((err) => console.error("[SIPD Mod] Download failed:", err))
-            .finally(() => setLoading(downloadBtn, false));
-        });
-      }
-
-      // ── Clear Handler ──
-      const clearBtn = el.querySelector("button[name='clear']");
-      if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
-          const table = el.querySelector(".table-result-container");
-          if (table) table.remove();
-          el._lastFetchedData = null;
-          console.log("[SIPD Mod] Table cleared");
-        });
-      }
-
-      // ╔══════════════════════════════════════════════════════╗
-      // ║       SUB KEGIATAN FILTER HANDLERS                  ║
-      // ╚══════════════════════════════════════════════════════╝
-
-      const loadBtn = el.querySelector("button[name='load']");
-      const loadArea = el.querySelector("#subkeg-load-area");
-      const filterArea = el.querySelector("#subkeg-filter-area");
-      const subSkpdSelect = el.querySelector("select[name='subSkpd']");
-      const subKegSelect = el.querySelector("select[name='subKeg']");
-      const subkegViewBtn = el.querySelector("button[name='subkegView']");
-      const subkegDownloadBtn = el.querySelector(
-        "button[name='subkegDownload']",
-      );
-      const subkegClearBtn = el.querySelector("button[name='subkegClear']");
-
-      // Stored fetched data for sub kegiatan section
       let subkegData = null;
+      const loadArea = $("#subkeg-load-area");
+      const filterArea = $("#subkeg-filter-area");
+      const subSkpd = sel("subSkpd");
+      const subKeg = sel("subKeg");
 
-      /** Populate a select with unique values */
-      const populateSelect = (
-        select,
-        items,
-        valueKey,
-        textKey,
-        placeholder,
-      ) => {
-        const seen = new Map();
-        items.forEach((item) => {
-          const v = item[valueKey];
-          if (v && !seen.has(v)) seen.set(v, item[textKey] || v);
-        });
-        select.innerHTML =
-          `<option value="" disabled selected>${placeholder}</option>` +
-          [...seen.entries()]
-            .sort((a, b) => a[1].localeCompare(b[1], "id"))
-            .map(([val, txt]) => `<option value="${val}">${txt}</option>`)
-            .join("");
-      };
-
-      /** Update sub kegiatan dropdown based on selected sub SKPD */
-      const updateSubKegOptions = () => {
+      const updateSubKeg = () => {
         if (!subkegData) return;
-        const selectedSkpd = subSkpdSelect.value;
-        const filtered = selectedSkpd
-          ? subkegData.filter((d) => d.kode_sub_skpd === selectedSkpd)
-          : subkegData;
+        const v = subSkpd.value;
         populateSelect(
-          subKegSelect,
-          filtered,
+          subKeg,
+          v ? subkegData.filter((d) => d.kode_sub_skpd === v) : subkegData,
           "kode_sub_giat",
           "nama_sub_giat",
           "Pilih Sub Kegiatan ...",
         );
       };
 
-      /** Group+sum data by Nama Rekening for the selected sub kegiatan */
       const getGroupedData = () => {
         if (!subkegData) return [];
-        const skpd = subSkpdSelect.value;
-        const keg = subKegSelect.value;
+        const s = subSkpd.value,
+          k = subKeg.value;
         const filtered = subkegData.filter(
-          (d) =>
-            (!skpd || d.kode_sub_skpd === skpd) &&
-            (!keg || d.kode_sub_giat === keg),
+          (d) => (!s || d.kode_sub_skpd === s) && (!k || d.kode_sub_giat === k),
         );
-
-        // Group by kode_rekening, sum nilai_realisasi
         const groups = new Map();
         filtered.forEach((d) => {
           const key = d.kode_rekening || "-";
-          if (!groups.has(key)) {
+          if (!groups.has(key))
             groups.set(key, {
               nama_sub_skpd: d.nama_sub_skpd || "-",
               nama_sub_giat: d.nama_sub_giat || "-",
@@ -888,7 +891,6 @@
               nama_rekening: d.nama_rekening || "-",
               nilai_realisasi: 0,
             });
-          }
           groups.get(key).nilai_realisasi += Number(d.nilai_realisasi) || 0;
         });
         return [...groups.values()].sort((a, b) =>
@@ -896,214 +898,56 @@
         );
       };
 
-      // ── Load Handler ──
-      if (loadBtn) {
-        loadBtn.addEventListener("click", () => {
-          const token = getAuthToken();
-          const currentMonth = new Date().getMonth() + 1;
-          setLoading(loadBtn, true);
+      btn("load")?.addEventListener("click", () => {
+        setLoading(btn("load"), true);
+        fetchRealisasi(1, new Date().getMonth() + 1, getAuthToken())
+          .then((data) => {
+            subkegData = data;
+            populateSelect(
+              subSkpd,
+              data,
+              "kode_sub_skpd",
+              "nama_sub_skpd",
+              "Pilih Sub SKPD ...",
+            );
+            updateSubKeg();
+            loadArea.classList.add("hidden");
+            filterArea.classList.remove("hidden");
+          })
+          .catch((err) => console.error("[SIPD Mod] Load failed:", err))
+          .finally(() => setLoading(btn("load"), false));
+      });
 
-          fetchRealisasi(1, currentMonth, token)
-            .then((data) => {
-              subkegData = data;
-              console.log(
-                `[SIPD Mod] Sub Kegiatan: loaded ${data.length} records`,
-              );
+      subSkpd?.addEventListener("change", updateSubKeg);
 
-              // Populate Sub SKPD dropdown
-              populateSelect(
-                subSkpdSelect,
-                data,
-                "kode_sub_skpd",
-                "nama_sub_skpd",
-                "Pilih Sub SKPD ...",
-              );
-              updateSubKegOptions();
-
-              // Show filters, hide load button
-              loadArea.classList.add("hidden");
-              filterArea.classList.remove("hidden");
-            })
-            .catch((err) => console.error("[SIPD Mod] Load failed:", err))
-            .finally(() => setLoading(loadBtn, false));
+      btn("subkegView")?.addEventListener("click", () => {
+        const html = renderSimpleTable({
+          colDefs: SUBKEG_COLS,
+          data: getGroupedData(),
+          containerClass: "subkeg-table-container",
+          countLabel: "rekening",
         });
-      }
+        $(".subkeg-table-container")?.remove();
+        filterArea.closest(".card-body").insertAdjacentHTML("beforeend", html);
+      });
 
-      // Sub SKPD change → update sub kegiatan options
-      if (subSkpdSelect)
-        subSkpdSelect.addEventListener("change", updateSubKegOptions);
-
-      // ── Sub Kegiatan View Handler ──
-      if (subkegViewBtn) {
-        subkegViewBtn.addEventListener("click", () => {
-          const grouped = getGroupedData();
-          const SUBCOLS = [
-            { label: "No", align: "text-center" },
-            { label: "Nama Sub SKPD", align: "" },
-            { label: "Nama Sub Kegiatan", align: "" },
-            { label: "Kode Rekening", align: "" },
-            { label: "Nama Rekening", align: "" },
-            { label: "Nilai Realisasi", align: "text-right" },
-          ];
-
-          const thead = SUBCOLS.map((c) => thCell(c.label, c.align)).join("");
-          let totalRealisasi = 0;
-          const rows = grouped
-            .map((g, i) => {
-              totalRealisasi += g.nilai_realisasi;
-              return `<tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700">
-              ${tdCell(i + 1, "text-center")}
-              ${tdCell(g.nama_sub_skpd)}
-              ${tdCell(g.nama_sub_giat)}
-              ${tdCell(g.kode_rekening, "whitespace-nowrap")}
-              ${tdCell(g.nama_rekening)}
-              ${tdCell(formatRupiah(g.nilai_realisasi), "text-right whitespace-nowrap")}
-            </tr>`;
-            })
-            .join("");
-
-          const container = document.createElement("div");
-          container.className = "mt-5 overflow-x-auto subkeg-table-container";
-          container.innerHTML = `
-            <p class="mb-2 text-sm text-slate-500 dark:text-slate-400">Total ${grouped.length} rekening</p>
-            <table class="w-full text-sm text-left border-collapse border border-slate-300 dark:border-slate-700">
-              <thead class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>${thead}</tr></thead>
-              <tbody>${rows || `<tr><td colspan="6" class="p-4 text-center">Tidak ada data</td></tr>`}</tbody>
-              ${
-                grouped.length > 0
-                  ? `<tfoot class="bg-slate-100 dark:bg-slate-900 font-bold"><tr>
-                <td colspan="5" class="p-2 border border-slate-300 dark:border-slate-700 text-right">Total</td>
-                ${tdCell(formatRupiah(totalRealisasi), "text-right whitespace-nowrap")}
-              </tr></tfoot>`
-                  : ""
-              }
-            </table>`;
-
-          const existing = el.querySelector(".subkeg-table-container");
-          if (existing) existing.remove();
-          filterArea.closest(".card-body").appendChild(container);
+      btn("subkegDownload")?.addEventListener("click", () => {
+        const grouped = getGroupedData();
+        if (!grouped.length) return;
+        buildSimpleExcel({
+          title: "REALISASI PER SUB KEGIATAN",
+          colDefs: SUBKEG_COLS,
+          data: grouped,
+          sheetName: "Realisasi Per Sub Kegiatan",
+          filename: "Realisasi Per Sub Kegiatan.xlsx",
         });
-      }
+      });
 
-      // ── Sub Kegiatan Download Handler ──
-      if (subkegDownloadBtn) {
-        subkegDownloadBtn.addEventListener("click", () => {
-          const grouped = getGroupedData();
-          if (!grouped.length) return;
-
-          const wb = XLSX.utils.book_new();
-          const border = {
-            top: { style: "thin" },
-            bottom: { style: "thin" },
-            left: { style: "thin" },
-            right: { style: "thin" },
-          };
-          const sH = {
-            font: { bold: true },
-            alignment: {
-              horizontal: "center",
-              vertical: "center",
-              wrapText: true,
-            },
-            border,
-            fill: { fgColor: { rgb: "D9E1F2" } },
-          };
-          const sT = {
-            font: { bold: true, sz: 14 },
-            alignment: { horizontal: "center" },
-          };
-          const sL = {
-            alignment: { vertical: "center", wrapText: true },
-            border,
-          };
-          const sC = {
-            alignment: { horizontal: "center", vertical: "center" },
-            border,
-          };
-          const sM = {
-            alignment: { horizontal: "right", vertical: "center" },
-            border,
-            numFmt: '"Rp."#,##0',
-          };
-
-          const headers = [
-            "No",
-            "Nama Sub SKPD",
-            "Nama Sub Kegiatan",
-            "Kode Rekening",
-            "Nama Rekening",
-            "Nilai Realisasi",
-          ];
-          const aoa = [
-            [{ v: "REALISASI PER SUB KEGIATAN", t: "s", s: sT }],
-            [],
-            headers.map((h) => ({ v: h, t: "s", s: sH })),
-          ];
-
-          let total = 0;
-          grouped.forEach((g, i) => {
-            total += g.nilai_realisasi;
-            aoa.push([
-              { v: String(i + 1), t: "s", s: sC },
-              { v: g.nama_sub_skpd, t: "s", s: sL },
-              { v: g.nama_sub_giat, t: "s", s: sL },
-              { v: g.kode_rekening, t: "s", s: sC },
-              { v: g.nama_rekening, t: "s", s: sL },
-              { v: g.nilai_realisasi, t: "n", z: '"Rp."#,##0', s: sM },
-            ]);
-          });
-
-          aoa.push([
-            { v: "Total", t: "s", s: sH },
-            { v: "", t: "s", s: sH },
-            { v: "", t: "s", s: sH },
-            { v: "", t: "s", s: sH },
-            { v: "", t: "s", s: sH },
-            {
-              v: total,
-              t: "n",
-              z: '"Rp."#,##0',
-              s: { ...sM, font: { bold: true } },
-            },
-          ]);
-
-          const ws = XLSX.utils.aoa_to_sheet(aoa);
-          ws["!cols"] = [
-            { wch: 6 },
-            { wch: 35 },
-            { wch: 40 },
-            { wch: 20 },
-            { wch: 40 },
-            { wch: 22 },
-          ];
-          ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
-
-          XLSX.utils.book_append_sheet(wb, ws, "Realisasi Per Sub Kegiatan");
-          XLSX.writeFile(wb, "Realisasi Per Sub Kegiatan.xlsx");
-          console.log("[SIPD Mod] Sub Kegiatan Excel downloaded");
-        });
-      }
-
-      // ── Sub Kegiatan Clear Handler ──
-      if (subkegClearBtn) {
-        subkegClearBtn.addEventListener("click", () => {
-          const table = el.querySelector(".subkeg-table-container");
-          if (table) table.remove();
-          // Keep subkegData cached — don't fetch again
-          console.log("[SIPD Mod] Sub Kegiatan table cleared");
-        });
-      }
+      btn("subkegClear")?.addEventListener("click", () => {
+        $(".subkeg-table-container")?.remove();
+      });
     },
   });
 
   // ===== ADD MORE MODULES BELOW =====
-  // registerModule({
-  //   id: 'my-new-feature',
-  //   name: 'Feature Name',
-  //   urlPattern: '/some/path',
-  //   targetSelector: '.some-container',
-  //   waitForReady: false,
-  //   render: () => `<div>Content</div>`,
-  //   onMount: (el) => { /* event handlers */ },
-  // });
 })();
