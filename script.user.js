@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SIPD Mod by Thio Van
 // @namespace    https://sipd.kemendagri.go.id/
-// @version      3.1-260214
-// @description  Modular custom features for SIPD Dashboard
+// @version      3.2-260215
+// @description  Custom features for SIPD Dashboard
 // @author       Thio Van
 // @match        https://sipd.kemendagri.go.id/penatausahaan/*
 // @icon         https://sipd.kemendagri.go.id/penatausahaan/assets/progresive-web-app/favicon-32x32.png
@@ -363,11 +363,10 @@
   const cardWrapper = (sectionTitle, content) => `
 <div class="card rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 custom-class mt-5">
   <div class="card-header"><div>
-    <h1 class="card-title custom-class">Fitur Tambahan</h1>
+    <h1 class="card-title custom-class">${sectionTitle}</h1>
     <h1 class="card-subtitle custom-class text-danger">SIPD Mod by Thio Van</h1>
   </div></div>
   <div class="card-body p-6">
-    <h5 class="font-bold mb-2">${sectionTitle}</h5>
     <div class="grid grid-cols-12 mb-5 gap-5">${content}</div>
   </div>
 </div>`;
